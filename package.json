@@ -1,5 +1,5 @@
 {
-  "name": "neonflix1235567",
+  "name": "aflami-4.0",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -64,7 +64,7 @@
     "hls.js": "^1.7.3"
   },
   "devDependencies": {
-    "@opennextjs/cloudflare": "latest",
+    "@opennextjs/cloudflare": "1.6.5",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",
     "@types/react": "^18",
@@ -75,6 +75,6 @@
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
     "typescript": "^5",
-    "wrangler": "latest"
+    "wrangler": "^4.0.0"
   }
 }
