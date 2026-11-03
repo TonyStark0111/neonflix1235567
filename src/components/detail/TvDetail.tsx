@@ -1,0 +1,164 @@
+"use client"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import MediaHero from '@/src/components/detail/MediaHero'
+import SectionNav from '@/src/components/detail/SectionNav'
+import EpisodeBrowser, { type Episode, type Season } from '@/src/components/detail/EpisodeBrowser'
+import { CastRow, CrewRow, DetailsGrid } from '@/src/components/detail/DetailSections'
+import MoreLikeThis from '@/src/components/detail/MoreLikeThis'
+import ExtrasSection from '@/src/components/detail/ExtrasSection'
+import { detailSections, type DetailServerProps } from '@/src/components/detail/MovieDetail'
+import RatingsBand from '@/src/components/social/RatingsBand'
+import { useRoomLight } from '@/src/components/shell/RoomLight'
+import { useMarkWatched } from '@/src/hooks/use-media-lists'
+import { ambientStyle, useAmbientColor } from '@/src/hooks/use-ambient-color'
+import { toast } from '@/src/hooks/use-toast'
+import { getSeasonDetails } from '@/src/app/tv/[id]/actions'
+import { useSoundtrack } from '@/src/hooks/use-soundtrack'
+import { useT } from '@/src/components/I18nProvider'
+
+type Pick = { season: number, episode: number }
+
+/** A show page: the hero, the player, the episodes, ratings, similar shows, extras, the cast and the facts. */
+export default function TvDetail({ id, data, similar, resume, providers, kids, signedIn, ratings, tabs, trailers, extras, soundtrack: initialSoundtrack, englishName }: DetailServerProps & {
+  /** Episode to reopen (from "Continue watching" links: /tv/:id?s=&e=). */
+  resume?: Pick
+  /** TMDB's English name, when the page shows a translated one (torrent releases use it). */
+  englishName?: string
+}) {
+  const t = useT()
+  const router = useRouter()
+  const soundtrack = useSoundtrack({ type: 'tv', id, kids, initial: initialSoundtrack })
+  const ambient = useAmbientColor(data.poster_path)
+  useRoomLight(ambient)
+  const markWatched = useMarkWatched({ id, title: data.name, poster_path: data.poster_path, media_type: 'tv' })
+
+  const seasons: Season[] = useMemo(() => data.seasons ?? [], [data.seasons])
+  const [selectedSeason, setSelectedSeason] = useState<number | null>(null)
+  const [episodes, setEpisodes] = useState<Episode[]>([])
+  const [seasonLoading, setSeasonLoading] = useState(false)
+  const [episode, setEpisode] = useState<Pick | null>(null)
+  const requestRef = useRef(0)
+  const firstSeason = (seasons.find((season) => season.season_number > 0) ?? seasons[0])?.season_number
+
+  const loadSeason = useCallback(async (seasonNumber: number): Promise<Episode[] | null> => {
+    // Only the latest request wins if the viewer flips through seasons quickly.
+    const request = ++requestRef.current
+    setSeasonLoading(true)
+    setSelectedSeason(seasonNumber)
+    try {
+      const season = await getSeasonDetails(id, seasonNumber)
+      if (request !== requestRef.current) return null
+      const list: Episode[] = season.episodes ?? []
+      setEpisodes(list)
+      return list
+    } catch (error) {
+      if (request !== requestRef.current) return null
+      console.error('Error fetching season:', error)
+      toast({ title: t('common.error'), description: t('tv.seasonFailed'), variant: 'destructive', duration: 3000 })
+      return null
+    } finally {
+      if (request === requestRef.current) setSeasonLoading(false)
+    }
+  }, [id, t])
+
+  // Open the resumed season (from a "Continue watching" link) or else the first real season
+  // (skipping "Specials"), so there are episodes to pick right away.
+  useEffect(() => {
+    const resumable = resume && seasons.some((season) => season.season_number === resume.season)
+    const start = resumable ? resume.season : firstSeason
+    if (start === undefined) return
+    loadSeason(start).then(() => {
+      if (!resumable) return
+      setEpisode(resume)
+      markWatched(resume)
+      toast({
+        title: t('tv.welcomeBack'),
+        description: t('tv.resuming', { episode: t('common.seasonEpisode', { season: resume.season, episode: resume.episode }) }),
+        duration: 3000,
+      })
+      router.replace(`/watch/tv/${id}?s=${resume.season}&e=${resume.episode}`)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id])
+
+  const goWatch = useCallback((item: Pick) => {
+    markWatched(item)
+    router.push(`/watch/tv/${id}?s=${item.season}&e=${item.episode}`)
+  }, [markWatched, router, id])
+
+  const pickEpisode = useCallback((item: Pick) => {
+    setEpisode(item)
+    goWatch(item)
+  }, [goWatch])
+
+  /** Hero "Play": the episode in progress, or the very first one. */
+  const playFromStart = async () => {
+    if (episode) return goWatch(episode)
+    if (firstSeason === undefined) return
+    const list = selectedSeason === firstSeason && episodes.length ? episodes : await loadSeason(firstSeason)
+    const first = list?.[0]
+    if (first) pickEpisode({ season: first.season_number, episode: first.episode_number })
+  }
+
+  // The next episode: in this season, or the first of the next season.
+  const next = useMemo(() => {
+    if (!episode) return null
+    const index = episodes.findIndex((item) => item.season_number === episode.season && item.episode_number === episode.episode)
+    if (index >= 0 && index < episodes.length - 1) return { season: episodes[index + 1].season_number, episode: episodes[index + 1].episode_number }
+    const following = seasons.find((season) => season.season_number > episode.season && season.episode_count > 0)
+    return following ? { season: following.season_number, episode: 1 } : null
+  }, [episode, episodes, seasons])
+
+  const playNext = async () => {
+    if (!next) return
+    if (next.season !== selectedSeason) await loadSeason(next.season)
+    pickEpisode(next)
+  }
+
+  const code = (item: Pick) => t('common.seasonEpisode', { season: item.season, episode: item.episode })
+  const playLabel = episode
+    ? t('detail.playEpisode', { episode: code(episode) })
+    : firstSeason !== undefined ? t('detail.playEpisode', { episode: code({ season: firstSeason, episode: 1 }) }) : t('billboard.play')
+
+  const cast: any[] = data.credits?.cast ?? []
+  const crew: any[] = data.credits?.crew ?? []
+  const media = useMemo(() => ({ media_type: 'tv' as const, id, title: data.name ?? '', poster_path: data.poster_path ?? null }), [id, data.name, data.poster_path])
+
+  const sections = useMemo(() => detailSections(t, {
+    episodes: seasons.length > 0,
+    ratings,
+    similar: tabs.length > 0,
+    extras: extras.length > 0 || initialSoundtrack.state === 'found',
+    // One nav item "Cast" scrolls to #cast; crew sits under it (no separate Crew tab).
+    cast: cast.length > 0 || crew.length > 0,
+  }), [t, seasons.length, ratings, tabs.length, extras.length, initialSoundtrack.state, cast.length, crew.length])
+
+  return (
+    <div className="w-full min-w-0 pb-6" {...ambientStyle(ambient)}>
+      <MediaHero kind="tv" data={data} playLabel={playLabel} onPlay={playFromStart} trailers={trailers} kids={kids} />
+      <SectionNav sections={sections} />
+      <div className="space-y-16 pt-10">
+        {seasons.length > 0 && (
+          <EpisodeBrowser
+            id="episodes"
+            seasons={seasons}
+            selectedSeason={selectedSeason}
+            episodes={episodes}
+            loading={seasonLoading}
+            current={episode}
+            onSeason={(season) => { loadSeason(season) }}
+            onEpisode={(item) => pickEpisode({ season: item.season_number, episode: item.episode_number })}
+          />
+        )}
+
+        {ratings && <RatingsBand id="ratings" media={media} />}
+        {tabs.length > 0 && <MoreLikeThis kind="tv" id={id} kids={kids} closest={similar} tabs={tabs} />}
+        <ExtrasSection type="tv" id={id} title={data.name ?? ''} kids={kids} groups={extras} soundtrack={soundtrack} />
+        <CastRow id="cast" cast={cast} mediaType="tv" mediaId={id} signedIn={signedIn} />
+        <CrewRow crew={crew} />
+        <DetailsGrid id="details" kind="tv" data={data} soundtrack={soundtrack.status} kids={kids} />
+      </div>
+    </div>
+  )
+}

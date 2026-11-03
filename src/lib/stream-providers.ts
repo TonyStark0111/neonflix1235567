@@ -1,0 +1,156 @@
+// Third-party embed / download providers, keyed by TMDB id. Server only.
+//
+// This is the single place sources come from: every movie and TV page reads its templates from
+// here (getProviderTemplates) and hands them to the player, which fills in the title and episode
+// (fillProviders in lib/media-assets). Each provider builds its own URL for a movie or a TV episode
+// (providers disagree on how the season/episode is passed: some use a path, some a query string).
+//
+// These are external services the app does not control; any of them can change or go down, which
+// is why the player lets the viewer switch between several, and why the list can change without
+// touching the code (Vercel → Settings → Environment Variables, then redeploy):
+//
+// - STREAM_PROVIDERS: the whole list, as JSON, best first. `{id}`, `{season}` and `{episode}`
+//   are filled in. Optional `logo` is an absolute https image URL shown next to the name in the
+//   player source bar (XEONFLIX). If omitted, a favicon is derived from the movie URL host:
+//   [{"name":"Vidy","movie":"https://www.vidy.st/movie/{id}","tv":"https://www.vidy.st/tv/{id}/{season}/{episode}","logo":"https://www.vidy.st/favicon.ico"}]
+// - STREAM_PROVIDERS_OFF: names to switch off, comma-separated (e.g. "2Embed,AutoEmbed").
+//
+// Both are read on the server only (a client bundle never sees them, which is why the pages pass
+// the templates down as props instead of the player importing this file).
+//
+// The order also fixes itself: sources viewers report as broken move to the end of the player's
+// list (lib/stream-health).
+import 'server-only'
+
+export type MediaType = 'movie' | 'tv'
+
+/** A filled-in source the player can open. `logo` is optional (provider icon from website URL). */
+export type StreamProvider = { name: string; url: string; logo?: string }
+
+/**
+ * A provider as URL templates: `{id}` (and for TV `{season}`, `{episode}`) get filled in.
+ * Optional `logo`: absolute https URL of the provider's logo/icon (shown in the XEONFLIX source bar).
+ */
+export type ProviderTemplate = { name: string; movie: string; tv: string; logo?: string }
+
+/** Favicon-style logo URL derived from a provider movie template host (Google s2 favicons). */
+export function logoFromMovieUrl(movieUrl: string): string | undefined {
+  try {
+    const host = new URL(movieUrl).hostname.replace(/^www\./, '')
+    if (!host) return undefined
+    return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`
+  } catch {
+    return undefined
+  }
+}
+
+function withLogo(template: ProviderTemplate): ProviderTemplate {
+  const logo = template.logo?.trim() || logoFromMovieUrl(template.movie)
+  return logo ? { ...template, logo } : template
+}
+
+// Ordered best-first; the first one is selected by default.
+//
+// The set was probed for reachability + a real player payload (2026). These are client-rendered,
+// region-gated players, so availability varies by the viewer's network — hence several sources to
+// switch between. If one stops working, drop it here; the UI updates everywhere.
+//
+// NOTE: the last 6 entries were ported from a richer provider definition that supported per-audio
+// language switching. The template system here only fills in {id}/{season}/{episode}, so those
+// providers are locked to their Hindi default (lang=hi / dubLang=hi / server=hindi / sub).
+//
+// Logos: optional explicit `logo` URLs; otherwise derived from the movie host at runtime.
+const BUILT_IN: ProviderTemplate[] = [
+  // ZXC Server 1 (Orion, multi-audio) and Server 3 (Atlas, multi-audio). Series take season/episode as
+  // query params on this host (/player/tv/{id}?season=&episode=), unlike the path style used below.
+  { name: 'SRV-Zxc-Orion', movie: 'https://zxcstream.cc/player/movie/{id}?dubLang=hi&server=0', tv: 'https://zxcstream.cc/player/tv/{id}?season={season}&episode={episode}&dubLang=hi&server=0' },
+  { name: 'SRV-Zxc-Atlas', movie: 'https://zxcstream.cc/player/movie/{id}?dubLang=hi&server=2', tv: 'https://zxcstream.cc/player/tv/{id}?season={season}&episode={episode}&dubLang=hi&server=2' },
+  { name: 'SRV-Vidy', movie: 'https://www.vidy.st/movie/{id}?color=DC2626', tv: 'https://www.vidy.st/tv/{id}/{season}/{episode}?color=DC2626&nextEpisode=true&episodeSelector=true' },
+  { name: 'SRV-Vid-Ly', movie: 'https://vidly.pro/movie/{id}', tv: 'https://vidly.pro/tv/{id}/{season}/{episode}' },
+  { name: 'SRV-Vid-Rock', movie: 'https://vidrock.net/embed/movie/{id}', tv: 'https://vidrock.net/embed/tv/{id}/{season}/{episode}' },
+  { name: 'SRV-Vid-Link', movie: 'https://vidlink.pro/movie/{id}', tv: 'https://vidlink.pro/tv/{id}/{season}/{episode}' },
+  { name: 'SRV-Vid-Lux', movie: 'https://vidlux.xyz/embed/movie/{id}', tv: 'https://vidlux.xyz/embed/tv/{id}/{season}/{episode}' },
+  { name: 'SRV-Vid-Zen', movie: 'https://vidzen.fun/movie/{id}', tv: 'https://vidzen.fun/tv/{id}/{season}/{episode}' },
+  { name: 'SRV-Vid-Core', movie: 'https://vidcore.io/movie/{id}?autoPlay=true', tv: 'https://vidcore.io/tv/{id}/{season}/{episode}?autoPlay=true' },
+  { name: 'SRV-Vid-Up', movie: 'https://vidup.to/movie/{id}?autoPlay=true', tv: 'https://vidup.to/tv/{id}/{season}/{episode}?autoPlay=true' },
+  { name: 'SRV-Vid-Zee', movie: 'https://player.vidzee.wtf/embed/movie/{id}', tv: 'https://player.vidzee.wtf/embed/tv/{id}/{season}/{episode}' },
+  { name: 'SRV-Vid-Bolt', movie: 'https://vidbolt.xyz/movie/{id}', tv: 'https://vidbolt.xyz/tv/{id}/{season}/{episode}' },
+  { name: 'SRV-Vid-Nest', movie: 'https://vidnest.fun/movie/{id}', tv: 'https://vidnest.fun/tv/{id}/{season}/{episode}' },
+  { name: 'SRV-Vid-Rift', movie: 'https://embed.vidrift.in/embed/movie/{id}?brand=Meowly', tv: 'https://embed.vidrift.in/embed/tv/{id}/{season}/{episode}?brand=Meowly' },
+  { name: 'SRV-Vid-Fast', movie: 'https://vidfast.net/movie/{id}', tv: 'https://vidfast.net/tv/{id}/{season}/{episode}' },
+  { name: 'SRV-VidSrc-pm', movie: 'https://vidsrc.pm/embed/movie/{id}', tv: 'https://vidsrc.pm/embed/tv/{id}/{season}/{episode}' },
+  { name: 'SRV-VidSrc-Su', movie: 'https://vidsrcme.su/embed/movie?tmdb={id}', tv: 'https://vidsrcme.su/embed/tv?tmdb={id}&season={season}&episode={episode}' },
+  { name: 'SRV-Cine-Src', movie: 'https://cinesrc.st/embed/movie/{id}', tv: 'https://cinesrc.st/embed/tv/{id}/{season}/{episode}' },
+  { name: 'SRV-Nxsha-Prime', movie: 'https://nxsha.space/embed/movie/{id}?lang=hi&disable_app_ad=true', tv: 'https://nxsha.space/embed/tv/{id}/{season}/{episode}?lang=hi&disable_app_ad=true' },
+  { name: 'SRV-Prime-Src', movie: 'https://primesrc.me/embed/movie?tmdb={id}', tv: 'https://primesrc.me/embed/tv?tmdb={id}&season={season}&episode={episode}' },
+  { name: 'SRV-Filmu', movie: 'https://embed.filmu.in/movie/{id}', tv: 'https://embed.filmu.in/tv/{id}/{season}/{episode}' },
+  { name: 'SRV-2Embed', movie: 'https://www.2embed.skin/embed/{id}', tv: 'https://www.2embed.skin/embedtv/{id}&s={season}&e={episode}' },
+  { name: 'SRV-AutoEmbed', movie: 'https://autoembed.co/movie/tmdb/{id}', tv: 'https://autoembed.co/tv/tmdb/{id}-{season}-{episode}' },
+  { name: 'SRV-Modi-Play', movie: 'https://rozgarlelo.modiplay.xyz/embed/tmdb/movie?id={id}', tv: 'https://rozgarlelo.modiplay.xyz/embed/tmdb/tv?id={id}&season={season}&episode={episode}' },
+  { name: 'SRV-PlayApi', movie: 'https://playapi.co/movie/{id}', tv: 'https://playapi.co/tv/{id}/{season}/{episode}' },
+  { name: 'SRV-Bingr', movie: 'https://bingr.one/watch/movie/{id}', tv: 'https://bingr.one/watch/tv/{id}/{season}/{episode}' },
+  
+  // --- Ported from friend's streaming.js (Hindi default) ---
+  { name: 'SRV-Tgvid-Prime', movie: 'https://tgvid.lovable.app/embed/movie/{id}?color=38bdf8&back=true&server=hindi&lang=hi', tv: 'https://tgvid.lovable.app/embed/tv/{id}/{season}/{episode}?color=38bdf8&back=true&server=hindi&lang=hi&episodeSelector=false&autoplayNextEp=false' },
+  { name: 'SRV-Megaplay-Direct', movie: 'https://megaplay.buzz/stream/ani/{id}/1/sub?autoplay=true', tv: 'https://megaplay.buzz/stream/ani/{id}/{episode}/sub?autoplay=true' },
+  { name: 'SRV-Zokoanime-Direct', movie: 'https://zokoanime.video/stream/ani/{id}/1/sub', tv: 'https://zokoanime.video/stream/ani/{id}/{episode}/sub' },
+  // Vid-Ly anime: the {id} here is an AniList / MAL id, NOT a TMDB id, so these only work when the page passes that id.
+  { name: 'SRV-Vidly-AnimeSub', movie: 'https://vidly.pro/anime/{id}/1/sub', tv: 'https://vidly.pro/anime/{id}/{episode}/sub' },
+  { name: 'SRV-Vidly-AnimeDub', movie: 'https://vidly.pro/anime/{id}/1/dub', tv: 'https://vidly.pro/anime/{id}/{episode}/dub' },
+  { name: 'SRV-Vidly-AnimeSubMal', movie: 'https://vidly.pro/anime/mal/{id}/1/sub', tv: 'https://vidly.pro/anime/mal/{id}/{episode}/sub' },
+  { name: 'SRV-Vidly-AnimeDubMal', movie: 'https://vidly.pro/anime/mal/{id}/1/dub', tv: 'https://vidly.pro/anime/mal/{id}/{episode}/dub' },
+  { name: 'SRV-4AnimoMulti-DubCDN', movie: 'https://cdn.4animo.xyz/embed/hd-3/ani/{id}/1/sub?k=1&autoplay=1', tv: 'https://cdn.4animo.xyz/embed/hd-3/ani/{id}/{episode}/sub?k=1&autoplay=1' },
+]
+
+type Template = { name?: unknown; movie?: unknown; tv?: unknown; logo?: unknown }
+
+/** STREAM_PROVIDERS, if it's set and valid; otherwise null (and the built-in list is used). */
+function fromEnv(raw: string | undefined): ProviderTemplate[] | null {
+  if (!raw?.trim()) return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) throw new Error('not an array')
+    const list = (parsed as Template[]).flatMap((item): ProviderTemplate[] => {
+      const { name, movie, tv, logo } = item ?? {}
+      const valid = typeof name === 'string' && name.trim() && typeof movie === 'string' && typeof tv === 'string'
+        && movie.startsWith('https://') && tv.startsWith('https://') && movie.includes('{id}') && tv.includes('{id}')
+      if (!valid) {
+        console.error('STREAM_PROVIDERS: skipped an entry without a name and https movie/tv templates containing {id}:', item)
+        return []
+      }
+      const logoUrl = typeof logo === 'string' && logo.startsWith('https://') ? logo.trim() : undefined
+      return [withLogo({ name: name.trim(), movie, tv, logo: logoUrl })]
+    })
+    return list.length ? list : null
+  } catch (error) {
+    console.error('STREAM_PROVIDERS is not valid JSON; using the built-in sources:', error)
+    return null
+  }
+}
+
+let memo: { key: string; list: ProviderTemplate[] } | null = null
+
+/**
+ * The stream sources as templates, best first: STREAM_PROVIDERS (or the built-in list) without
+ * the names in STREAM_PROVIDERS_OFF. Each entry gets a `logo` (explicit or favicon from host).
+ * Read from the environment on every call (memoised while it doesn't change), so a test or a
+ * redeploy with new values takes effect.
+ */
+export function getProviderTemplates(): ProviderTemplate[] {
+  const raw = process.env.STREAM_PROVIDERS ?? ''
+  const offRaw = process.env.STREAM_PROVIDERS_OFF ?? ''
+  const key = `${raw}\n${offRaw}`
+  if (memo?.key === key) return memo.list
+  const off = new Set(offRaw.split(',').map((name) => name.trim().toLowerCase()).filter(Boolean))
+  const list = (fromEnv(raw) ?? BUILT_IN.map(withLogo)).filter((provider) => !off.has(provider.name.toLowerCase()))
+  memo = { key, list }
+  return list
+}
+
+/** Names of all providers (for validating health reports). */
+export function providerNames(): readonly string[] {
+  return getProviderTemplates().map((provider) => provider.name)
+}
+
+/** Names of all providers, as configured when the server started (kept for older callers). */
+export const PROVIDER_NAMES: readonly string[] = providerNames()

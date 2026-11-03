@@ -1,0 +1,33 @@
+{
+  "name": "tunisiaflicks-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TunisiaFlicks desktop app — the TunisiaFlicks site in its own window, with the ad-free local player as a source.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "app.tunisiaflicks.desktop",
+    "productName": "TunisiaFlicks",
+    "files": ["main.js", "preload.js", "updater.js", "app/**/*"],
+    "extraResources": [
+      { "from": "../player-service", "to": "player-service", "filter": ["**/*", "!**/*.log", "!**/*.bin", "!add*.json", "!test-codec.mjs"] }
+    ],
+    "asar": true,
+    "publish": [{ "provider": "generic", "url": "https://tunisiaflicks.vercel.app/download/desktop-update" }],
+    "win": { "target": ["nsis"], "icon": "app/icon.png", "artifactName": "TunisiaFlicks-Setup.${ext}" },
+    "mac": { "target": ["dmg"] },
+    "linux": { "target": ["AppImage"] },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
+  }
+}
